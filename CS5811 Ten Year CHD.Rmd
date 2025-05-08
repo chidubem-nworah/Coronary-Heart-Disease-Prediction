@@ -1,0 +1,1736 @@
+---
+title: "Framingham Heart Disease"
+author: "Henry Nworah"
+date: "2024-02-02"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.show='show')
+```
+
+
+Packages used
+```{r}
+#Data Cleaning
+library(Hmisc)
+library(dplyr)
+
+#EDA
+library(ggplot2)
+library(cluster)
+library(gridExtra)
+library(vcd)
+
+#Supervised Machine Learning
+library(tree)
+```
+
+Reading the csv file into R dataframe
+```{r}
+getwd()
+fhd.df <- read.csv("framingham_heart_disease.csv", header = TRUE, stringsAsFactors = FALSE)
+```
+
+
+Inspecting each variable in the dataset
+```{r}
+summary(fhd.df)
+```
+
+
+Inspecting the structure of each variable in the dataset
+```{r}
+str(fhd.df)
+```
+
+
+Coercing categorical variables
+```{r}
+#creating a vector of nominal categorical variables
+fhd.cat.nom <- c("male", "currentSmoker", "BPMeds", "prevalentStroke", "prevalentHyp", "diabetes", "TenYearCHD")
+
+#coercing variables into categories
+fhd.df[fhd.cat.nom] <- lapply(fhd.df[fhd.cat.nom], as.factor)
+
+#coercing education as an ordinal category
+fhd.df$education <- factor(fhd.df$education, ordered = TRUE)
+
+#Inspecting the data again to confirm successful coercion of data types
+str(fhd.df)
+```
+
+
+Inspecting categorical levels and constraints
+```{r}
+#checking the levels for nominal categories
+lapply(fhd.df[fhd.cat.nom], table)
+
+#checking the levels for ordinal category
+table(fhd.df$education)
+```
+
+
+Renaming the "male" factor to "gender" and changing the levels
+```{r}
+#renaming male attribute to gender
+names(fhd.df)[names(fhd.df) == "male"] <- "gender"
+
+#renaming "1" level to male
+levels(fhd.df$gender)[levels(fhd.df$gender) == "1"] <- "male"
+
+#renaming "0" level to female
+levels(fhd.df$gender)[levels(fhd.df$gender) == "0"] <- "female"
+
+#inspecting gender levels
+levels(fhd.df$gender)
+```
+
+
+Clarifying the levels of the education variable. 
+```{r}
+#renaming "1" level to Secondary School
+levels(fhd.df$education)[levels(fhd.df$education) == "1"] <- "Secondary School"
+
+#renaming "2" level to Graduation
+levels(fhd.df$education)[levels(fhd.df$education) == "2"] <- "Graduation"
+
+#renaming "3" level to Post Graduation
+levels(fhd.df$education)[levels(fhd.df$education) == "3"] <- "Post Graduation"
+
+#renaming "4" level to PHD
+levels(fhd.df$education)[levels(fhd.df$education) == "4"] <- "PHD"
+
+#inspecting education levels
+levels(fhd.df$education)
+```
+
+
+Inspecting all variables
+```{r}
+summary(fhd.df)
+```
+
+
+Checking the percentage of missing values per variable
+```{r}
+#Counting the NA values in the dataframe
+fhd.df_count <- apply(is.na(fhd.df), 2,sum)
+fhd.df_count
+
+#Calculating the percentage
+fhd.df_per <- (round(fhd.df_count/nrow(fhd.df)*100,2))
+fhd.df_per 
+```
+
+Eliminating all rows with missing values and inspecting how many observations are retained
+```{r}
+#removing all rows with missing values
+fhd.df_omit <- na.omit(fhd.df)
+
+
+#looking at the data-frame structure after deletion of NA values and its contribution in percentage:
+dim(fhd.df_omit)
+ 
+perc_omit <- paste0(round(dim(fhd.df_omit) / dim(fhd.df) * 100, 2),"%")
+perc_omit
+```
+
+
+Looking for outliers (None of the outliers are beyond the realm of possibility, therefore they will be unchanged)
+```{r}
+#creating a vector of the numerical variables
+fhd.num <- c("age","cigsPerDay","totChol","sysBP","diaBP","BMI","heartRate","glucose")
+
+#plotting for all numerical variables
+boxplot_list <- lapply(seq_along(fhd.num), function(i) {
+  boxplot(fhd.df_omit[[fhd.num[i]]], main = fhd.num[i])
+})
+
+
+```
+
+
+Check for variables in reference as systolic blood pressure should always be higher than diastolic blood pressure
+```{r}
+which(fhd.df_omit$sysBP<fhd.df_omit$diaBP)
+```
+
+
+Alternatively, I can replace the missing values within the dataframe.
+Education and BPMeds are the categorical variables with missing values
+CigsPerDay, TotChol, BMI, heartrate and glucose are the numerical variables with missing values. 
+```{r}
+
+# Extract the 'glucose' column
+totglucose <- fhd.df_omit$glucose
+
+# Extract all numeric columns (excluding 'glucose')
+numeric_columns <- fhd.df_omit[sapply(fhd.df_omit, is.numeric) & names(fhd.df_omit) != "glucose"]
+
+# Use lapply to calculate correlations with 'glucose'
+correlations <- lapply(numeric_columns, function(column) cor(totglucose, column, use = "complete.obs"))
+
+# Print the results
+names(correlations) <- names(numeric_columns)
+print(correlations)
+
+```
+***The result indicates, that there is not noticeable correlation of numeric variables with glucose.*** 
+
+***If we subset missing values data from our main data, we can explore further to see which categories of each variable loses more data***
+
+```{r}
+# Subset the rows with missing values
+mis_subset <- fhd.df[!complete.cases(fhd.df), ]
+
+# Subset only categorical variables: 
+categorical_vars <- c("gender","education","currentSmoker","BPMeds","prevalentStroke","prevalentHyp","diabetes","TenYearCHD")
+mis_subset_CatVal <- mis_subset %>%
+  select(all_of(categorical_vars))
+
+# Subset only categorical variables: 
+categorical_vars <- c("gender","education","currentSmoker","BPMeds","prevalentStroke","prevalentHyp","diabetes","TenYearCHD")
+original_values_CatVal <- fhd.df %>%
+  select(all_of(categorical_vars))
+
+# Explore the missing value subset by summary function and check which categories have higher proportion of missing values:
+summary(mis_subset_CatVal)
+summary(original_values_CatVal)
+```
+
+
+
+Another approach to consider involves comparing the differences among variables for observations with missing glucose values and observations with available glucose values.
+```{r}
+#subset dataframe with only missing glucose values
+fhd.df_miss_gluc <- subset.data.frame(fhd.df, is.na(fhd.df$glucose))
+
+#subset dataframe with only available glucose values
+fhd.df_av_gluc <- subset.data.frame(fhd.df, !is.na(fhd.df$glucose))
+
+summary(fhd.df_miss_gluc)
+
+summary(fhd.df_av_gluc)
+
+```
+
+
+Comparing the factor levels first, the significant difference occurs in the gender category, where females are more likely to have their glucose info withheld.
+```{r}
+fhd.cat <- c("gender", "currentSmoker", "BPMeds", "prevalentStroke", "prevalentHyp", "diabetes", "TenYearCHD", "education")
+
+fhd.df_miss_gluc_t <- lapply(fhd.df_miss_gluc[fhd.cat], table)
+
+lapply(fhd.df_miss_gluc_t, prop.table)
+
+fhd.df_av_gluc_t <- lapply(fhd.df_av_gluc[fhd.cat], table)
+
+lapply(fhd.df_av_gluc_t, prop.table)
+
+```
+
+Inspecting the difference in numerical variables, none of the differences across the averages are significant. 
+LIMITATION: some of the values are missing in some of the variables which impacts the output. Also, mean and median do not give complete insight.
+```{r}
+#a 2nd numerical variables vector, excluding glucose
+fhd.num.2 <- c("age","cigsPerDay","totChol","sysBP","diaBP","BMI","heartRate")
+
+table((lapply(fhd.df_miss_gluc[fhd.num.2], mean, na.rm = T)))
+
+table(lapply(fhd.df_av_gluc[fhd.num.2], mean, na.rm = T))
+
+table(lapply(fhd.df_miss_gluc[fhd.num.2], median, na.rm = T))
+
+table(lapply(fhd.df_av_gluc[fhd.num.2], median, na.rm = T))
+```
+
+*One major reason I have decided to favour noise (random imputation) over variance bias (median/mean imputation) is that in searching for relationships and correlations in the machine learning process, a models ability to overcome the noise, aids in validating its strength.*
+```{r}
+#subsetting the female glucose values
+fem_gluc <- subset(fhd.df_av_gluc$glucose, fhd.df_av_gluc[1]=="female")
+
+#creating a random sample of glucose values based on female level alone
+set.seed(11)
+gluc_imp_val <- sample(fem_gluc, 388, replace = T)
+
+#replacing missing glucose values with random sample
+fhd.df$glucose[which(is.na(fhd.df$glucose))] <- gluc_imp_val
+
+#inspecting missingness of glucose variable
+which(is.na(fhd.df$glucose))
+```
+
+
+It is also important to note that there is no significant difference in average and median glucose levels between men and women, but there is less variance amongst women
+```{r}
+mean(fem_gluc)
+mean(subset(fhd.df_av_gluc$glucose, fhd.df_av_gluc[1]=="male"))
+
+median(fem_gluc)
+median(subset(fhd.df_av_gluc$glucose, fhd.df_av_gluc[1]=="male"))
+
+var(fem_gluc)
+var(subset(fhd.df_av_gluc$glucose, fhd.df_av_gluc[1]=="male"))
+```
+
+```{r}
+rem_num_var <- c("cigsPerDay", "totChol", "BMI", "heartRate")
+
+fhd.df[rem_num_var] <- lapply(fhd.df[rem_num_var], impute)
+```
+
+
+Reassessing dataframe
+```{r}
+str(fhd.df)
+```
+
+
+Similarly, there is a small proportion of missing values for the categorical variables. 
+```{r}
+table(fhd.df$BPMeds)
+
+#creating a random sample of "0" and "1" values
+set.seed(12)
+bpmed_imp_val <- sample(c("0","1"), sum(is.na(fhd.df$BPMeds)), replace = T)
+
+#replacing missing BPMeds values with random sample
+fhd.df$BPMeds[which(is.na(fhd.df$BPMeds))] <- bpmed_imp_val
+
+which(is.na(fhd.df$BPMeds))
+```
+
+
+Creating "Undisclosed" level for education variable
+```{r}
+#recalling % of missing education values
+sum(is.na(fhd.df$education))/nrow(fhd.df)*100
+
+#changing to character in order to input for NA
+fhd.df$education <- as.character(fhd.df$education)
+
+fhd.df$education[which(is.na(fhd.df$education))] <- "Undisclosed"
+
+#coercing back to factor, this time without ordering
+fhd.df$education <- as.factor(fhd.df$education)
+
+levels(fhd.df$education)
+```
+
+
+The final problem is that the undisclosed level takes away the ordinal property of the education factor so another option is to treat the missing values as "Below Secondary School".
+```{r}
+#new data frame where education remains an ordered category
+fhd.df_ord_edu <- fhd.df
+
+#changing the undisclosed level to below Secondary School
+levels(fhd.df_ord_edu$education)[levels(fhd.df_ord_edu$education) == "Undisclosed"] <- "Below Secondary School"
+
+#listing the levels in order
+fhd.df_ord_edu_lev <- c("Below Secondary School", "Secondary School", "Graduation", "Post Graduation", "PHD")
+
+#coercing to ordinal category type
+fhd.df_ord_edu$education <- factor(fhd.df_ord_edu$education, levels = fhd.df_ord_edu_lev, ordered = T)
+```
+
+
+```{r}
+which(is.na(fhd.df))
+```
+
+
+*EDA*
+All numerical variables for the cleaned dataset within a subset dataframe.
+NOTE: No difference here between fhd.df and fhd.df_ord_edu
+```{r}
+num.fhd.df <- fhd.df[sapply(fhd.df, is.numeric)]
+```
+
+Creating a correlation plot
+Only systolic and diastolic BP show some correlation. Perhaps Principal Component Analysis can be used to reduce the number of dimensions here. 
+```{r}
+cor_num <- cor(num.fhd.df)
+
+cor(num.fhd.df)
+
+pairs(cor_num,pch = 19, col = "#75AADB", cex=1)
+
+plot(fhd.df$sysBP,fhd.df$diaBP)
+
+plot(num.fhd.df)
+```
+
+
+Comparing each numerical variable to the target category.
+```{r}
+num_against_tar <- function(x) {
+  ggplot(fhd.df, aes(x = TenYearCHD, y = .data[[x]])) +
+    geom_boxplot() +
+    labs(x = "TenYearCHD", y = x)
+}
+
+# Apply the function to each numeric variable
+boxplot_num <- lapply(names(num.fhd.df), num_against_tar)
+boxplot_num
+```
+
+***We can display above boxplots in single view***
+```{r}
+num_against_tar <- function(x) {
+  ggplot(fhd.df, aes(x = TenYearCHD, y = .data[[x]])) +
+    geom_boxplot(fill = "orange", color = "red", alpha = 0.7) +
+    labs(x = "TenYearCHD", y = x) +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+
+# Apply the function to each numeric variable
+boxplot_num <- lapply(names(num.fhd.df), num_against_tar)
+
+# Arrange the boxplots in a grid
+grid.arrange(grobs = boxplot_num, ncol = 3)
+
+```
+
+
+All categorical variables (excluding target variable) for the cleaned dataset within a subset dataframe.
+```{r}
+cat.fhd.df <- fhd.df[sapply(fhd.df, is.factor) & names(fhd.df) != "TenYearCHD"]
+```
+
+For categorical variable, I will be applying hypothesis testing, but first check the frequency in the tables to decide between chi-squared test and Fishers test.
+```{r}
+cat_tar_table <- function(x) {table(fhd.df$TenYearCHD,x)}
+
+lapply(cat.fhd.df, cat_tar_table)
+```
+
+
+chi-squared test can be used for all cases as the frequencies are all greater than 5. There appears to be a dependency between TenYearCHD and all the categories asides current smoker.
+```{r}
+cat_against_tar <- function(x) {chisq.test(fhd.df$TenYearCHD,x)}
+
+lapply(cat.fhd.df, cat_against_tar)
+
+#Checking if there is a dependency with education variable being treated as ordinal
+wilcox.test(as.numeric(education)~TenYearCHD, data = fhd.df_ord_edu)
+```
+
+
+***Lets plot the binary categorical variables with target variable (TenYearCHD), to explore further correlation of categorical variables with target variable***
+```{r}
+mosaic(~gender + TenYearCHD, data = fhd.df, main = "TenYearCHD vs Gender")
+mosaic(~currentSmoker + TenYearCHD, data = fhd.df, main = "TenYearCHD vs Current Smoker")
+mosaic(~BPMeds + TenYearCHD, data = fhd.df, main = "TenYearCHD vs BP Medication")
+mosaic(~prevalentStroke + TenYearCHD, data = fhd.df, main = "TenYearCHD vs Prevalent Stroke")
+mosaic(~prevalentHyp + TenYearCHD, data = fhd.df, main = "TenYearCHD vs Prevalent Hypertension")
+mosaic(~diabetes + TenYearCHD, data = fhd.df, main = "TenYearCHD vs Diabetes")
+```
+
+
+Applying PCA to potentially reduce the number of variables and possibly simplify the supervised learning methods applied in the next stage
+```{r}
+#Creating the PC object based on fhd.df numerical variables
+# The varaibles are scaled before PCA application
+pca_fhd <- prcomp(num.fhd.df, center = T, scale. = T)
+
+#Variance of each Principal Component Variable
+pc_var_fhd <- pca_fhd$sdev^2
+
+#Proportion of explained variance
+PEV_fhd <- pc_var_fhd/sum(pc_var_fhd)
+```
+
+
+Plotting the cumulative sum of explained variance proportions. We can take PC1 to PC5 
+```{r}
+cumulative_sum <- cumsum(PEV_fhd)
+
+# Create a data frame for plotting
+plot_data <- data.frame(Index = seq_along(cumulative_sum), CumulativeSum = cumulative_sum)
+
+# Create a ggplot with cumulative sum as points and a horizontal line at y = 0.8
+ggplot(plot_data, aes(x = Index, y = CumulativeSum)) +
+  geom_point(color = "#75AADB", size = 3) +
+  geom_hline(yintercept = 0.8, linetype = "dashed", color = "#FF5733", size = 1) +
+  labs(title = "Cumulative Sum Plot",
+       x = "PCs",
+       y = "Cumulative Sum") +
+  scale_x_continuous(breaks = 1:8) +  # Set explicit breaks from 1 to 8
+  theme_minimal()  # You can experiment with different themes
+```
+
+
+
+Get PC loadings to create a barplot
+```{r}
+#PC loadings
+pc_fhd_load <- pca_fhd$rotation
+
+pc_names <- c("PC1","PC2","PC3","PC4","PC5")
+pc_col <- c("red", "brown", "orange","yellow","green", "cyan", "blue", "violet")
+
+num_rows_plot <- ceiling(length(row.names(pc_fhd_load)) / 3)
+
+barplot(pc_fhd_load[,1:5], beside = T, names.arg = pc_names, ylim = c(-1,1), yaxt = "n", col = pc_col)
+axis(2, seq(-1,1,0.1))
+
+legend("topleft", 
+       legend = row.names(pc_fhd_load), 
+       col = pc_col, 
+       pch = 15, 
+       bty = "n", 
+       cex = 0.7, 
+       ncol = num_rows_plot)
+
+abline(h = 0.5, col = "grey", lty = 2)
+abline(h = -0.5, col = "grey", lty = 2)
+```
+
+
+Plotting all PC values
+```{r}
+# Select the columns for scatterplot matrix
+selected_columns <- c(1, 2, 3, 4, 5)
+
+# Create a scatterplot matrix with colored points and labels
+pairs(pca_fhd$x[, selected_columns], col = "skyblue", pch = 20, cex.labels = 1)
+
+# Add labels to the points
+text(pca_fhd$x[, selected_columns], labels = rownames(pca_fhd$x), pos = 3, cex = 0.8)
+
+```
+
+
+Placing all PC variables for the cleaned dataset within a data frame.
+NOTE: These values are rooted from both fhd.df and fhd.df_ord_edu as they are the same for numerical variables
+```{r}
+pc.fhd.df <- pca_fhd$x[,1:5]
+
+pc.fhd.df <- as.data.frame(pc.fhd.df)
+```
+
+Creating a correlation plot
+```{r}
+cor_num.pc <- cor(pc.fhd.df)
+
+cor(pc.fhd.df)
+
+pairs(pc.fhd.df)
+```
+
+Comparing each PC variable to the target category.
+```{r}
+num_against_tar_pc <- function(x) {
+  ggplot(pc.fhd.df, aes(x = fhd.df$TenYearCHD, y = .data[[x]])) +
+    geom_boxplot(fill = "orange", color = "red", alpha = 0.7) +
+    labs(x = "TenYearCHD", y = x) +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+
+boxplot_pc <- lapply(names(pc.fhd.df), num_against_tar_pc)
+
+# Arrange the boxplots in a grid
+grid.arrange(grobs = boxplot_pc, ncol = 3)
+
+```
+
+
+*EDA 2*
+Next, the EDA process will be repeated for the dataset which omits missing values
+```{r}
+num.fhd.df_omit <- fhd.df_omit[sapply(fhd.df_omit, is.numeric)]
+```
+
+Creating a correlation plot, we obtain similar results as we did for the cleaned dataset
+```{r}
+cor_num_omit <- cor(num.fhd.df_omit)
+
+pairs(cor_num_omit,pch = 19, col = "skyblue", cex=1)
+
+cor(num.fhd.df_omit)
+
+plot(fhd.df_omit$sysBP,fhd.df_omit$diaBP)
+
+plot(num.fhd.df_omit)
+
+```
+
+Comparing each numerical variable to the target category.
+```{r}
+num_against_tar_omit <- function(x) {
+  ggplot(fhd.df_omit, aes(x = TenYearCHD, y = .data[[x]])) +
+    geom_boxplot() +
+    labs(x = "TenYearCHD", y = x)
+}
+
+# Apply the function to each numeric variable
+boxplot_num_omit <- lapply(names(num.fhd.df_omit), num_against_tar_omit)
+boxplot_num_omit
+
+```
+
+
+Another Option:
+```{r}
+num_against_tar_omit <- function(x) {
+  ggplot(fhd.df_omit, aes(x = TenYearCHD, y = .data[[x]])) +
+    geom_boxplot(fill = "green", color = "darkgreen", alpha = 0.7) +
+    labs(x = "TenYearCHD", y = x) +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+
+# Apply the function to each numeric variable
+boxplot_num_omit <- lapply(names(num.fhd.df_omit), num_against_tar_omit)
+
+# Arrange the boxplots in a grid
+grid.arrange(grobs = boxplot_num_omit, ncol = 4)
+
+```
+
+
+```{r}
+cat.fhd.df_omit <- fhd.df_omit[sapply(fhd.df_omit, is.factor) & names(fhd.df_omit) != "TenYearCHD"]
+```
+
+
+```{r}
+cat_tar_table_omit <- function(x) {table(fhd.df_omit$TenYearCHD,x)}
+
+lapply(cat.fhd.df_omit, cat_tar_table_omit)
+
+```
+
+
+Applying chi-squared test as all frequencies are greater than 5. Results are similar once again
+```{r}
+cat_against_tar_omit <- function(x) {chisq.test(fhd.df_omit$TenYearCHD,x)}
+
+lapply(cat.fhd.df_omit, cat_against_tar_omit)
+
+```
+
+
+```{r}
+mosaic(~gender + TenYearCHD, data = fhd.df_omit, main = "TenYearCHD vs Gender")
+mosaic(~currentSmoker + TenYearCHD, data = fhd.df_omit, main = "TenYearCHD vs Current Smoker")
+mosaic(~BPMeds + TenYearCHD, data = fhd.df_omit, main = "TenYearCHD vs BP Medication")
+mosaic(~prevalentStroke + TenYearCHD, data = fhd.df_omit, main = "TenYearCHD vs Prevalent Stroke")
+mosaic(~prevalentHyp + TenYearCHD, data = fhd.df_omit, main = "TenYearCHD vs Prevalent Hypertension")
+mosaic(~diabetes + TenYearCHD, data = fhd.df_omit, main = "TenYearCHD vs Diabetes")
+
+```
+
+
+
+Applying *PCA*
+```{r}
+#Creating the PC object based on fhd.df numerical variables
+pca_fhd_omit <- prcomp(num.fhd.df_omit, center = T, scale. = T)
+
+#Variance of each Principal Component Variable
+pc_var_fhd_omit <- pca_fhd_omit$sdev^2
+
+#Proportion of explained variance
+PEV_fhd_omit <- pc_var_fhd_omit/sum(pc_var_fhd_omit)
+
+```
+
+
+Plotting the cumulative sum of explained variance proportions. We can take PC1 to PC5 
+```{r}
+cumulative_sum_omit <- cumsum(PEV_fhd_omit)
+
+# Create a data frame for plotting
+plot_data_omit <- data.frame(Index = seq_along(cumulative_sum), CumulativeSum = cumulative_sum_omit)
+
+# Create a ggplot with cumulative sum as points and a horizontal line at y = 0.8
+ggplot(plot_data, aes(x = Index, y = CumulativeSum)) +
+  geom_point(color = "green", size = 3) +
+  geom_hline(yintercept = 0.8, linetype = "dashed", color = "darkgreen", size = 1) +
+  labs(title = "Cumulative Sum Plot",
+       x = "PCs",
+       y = "Cumulative Sum") +
+  scale_x_continuous(breaks = 1:8) +  # Set explicit breaks from 1 to 8
+  theme_minimal()  # You can experiment with different themes
+
+```
+
+
+
+```{r}
+#PC loadings
+pc_fhd_load_omit <- pca_fhd_omit$rotation
+
+#pc_names <- c("PC1","PC2","PC3","PC4","PC5")
+#pc_col <- c("red", "brown", "orange","yellow","green", "cyan", "blue", "violet")
+
+barplot(pc_fhd_load_omit[,1:5], beside = T, names.arg = pc_names, ylim = c(-1,1), yaxt = "n", col = pc_col)
+axis(2, seq(-1,1,0.1))
+
+num_rows_plot_omit <- ceiling(length(row.names(pc_fhd_load_omit)) / 3)
+
+legend("topleft", 
+       legend = row.names(pc_fhd_load_omit), 
+       col = pc_col, 
+       pch = 15, 
+       bty = "n", 
+       cex = 0.7, 
+       ncol = num_rows_plot_omit)
+
+abline(h = 0.5, col = "grey", lty = 2)
+abline(h = -0.5, col = "grey", lty = 2)
+
+```
+
+
+Similar relationships
+```{r}
+# Select the columns for scatterplot matrix
+selected_columns <- c(1, 2, 3, 4, 5)
+
+# Create a scatterplot matrix with colored points and labels
+pairs(pca_fhd_omit$x[, selected_columns], col = "grey", pch = 20, cex.labels = 2.5)
+
+# Add labels to the points
+text(pca_fhd_omit$x[, selected_columns], labels = rownames(pca_fhd_omit$x), pos = 3, cex = 0.8)
+
+```
+
+
+
+```{r}
+pc.fhd.df_omit <- pca_fhd_omit$x[,1:5]
+
+pc.fhd.df_omit <- as.data.frame(pc.fhd.df_omit)
+```
+
+
+Creating a correlation plot
+```{r}
+cor_num.pc_omit <- cor(pc.fhd.df_omit)
+
+cor(pc.fhd.df_omit)
+
+pairs(pc.fhd.df_omit)
+
+```
+
+
+Relationships appear to be similar
+```{r}
+num_against_tar_omit_pc <- function(x) {
+  ggplot(pc.fhd.df_omit, aes(x = fhd.df_omit$TenYearCHD, y = .data[[x]])) +
+    geom_boxplot(fill = "green", color = "darkgreen", alpha = 0.7) +
+    labs(x = "TenYearCHD", y = x) +
+    theme_minimal() +
+    theme(legend.position = "none")
+}
+
+# Apply the function to each numeric variable
+boxplot_num_omit_pc <- lapply(names(pc.fhd.df_omit), num_against_tar_omit_pc)
+
+# Arrange the boxplots in a grid
+grid.arrange(grobs = boxplot_num_omit_pc, ncol = 4)
+
+```
+
+
+
+*Cluster Analysis (Cleaned Dataset)*
+Cluster analysis will be applied to inspect potential differences between data points pertaining to the target variable
+```{r}
+k_fhd = kmeans(pc.fhd.df, 2)
+k_fhd
+
+k_cluster_id_fhd <- k_fhd$cluster
+
+```
+
+
+
+
+
+Visualizing the cluster separation using the two PC values with the greatest difference in cluster group means (PC1 and PC4), and comparing it with the separation in Target variable level. 
+```{r}
+clus.df <- data.frame(pc.fhd.df, fhd.df$TenYearCHD, k_cluster_id_fhd)
+
+target_colors <- c("pink", "cyan")
+
+ggplot(clus.df, aes(x = PC1, y = PC4, color = factor(k_cluster_id_fhd))) +
+  geom_point(size = 3) +
+  labs(title = "Scatterplot of PC1 vs. PC4 - Color Coded by K-Means Clustering",
+       x = "Principal Component 1", y = "Principal Component 4") + scale_color_manual(values = target_colors, name = "k_cluster_id_fhd") +
+  theme_minimal()
+
+# I flipped the colors to properly match the target variable to the more similar cluster group
+
+target_colors2 <- c("cyan", "pink")
+
+ggplot(clus.df, aes(x = PC1, y = PC4, color = fhd.df.TenYearCHD)) +
+  geom_point(size = 3) +
+  labs(title = "Scatterplot of PC1 vs. PC4 - Color Coded by Target Variable",
+       x = "Principal Component 1", y = "Principal Component 4") + scale_color_manual(values = target_colors2, name = "TenYearCHD") + 
+  theme_minimal()
+
+```
+
+
+The low p value of the chisq.test suggests that the cluster groups based on the PC values and the target variable are related.
+Proportion table suggests that most patients at risk of Ten Year CHD fall into cluster 1 while most without fall in cluster 2
+```{r}
+#Inspecting the relationship
+chisq.test(fhd.df$TenYearCHD,k_cluster_id_fhd)
+
+#Contingency table
+clus_tar_tab <- table(fhd.df$TenYearCHD,k_cluster_id_fhd)
+clus_tar_tab
+
+#Proportion by row(Target Variable)
+prop.table(clus_tar_tab, margin = 1)
+
+```
+
+
+Both clusters are dominated by patients who are not at risk of TenYearCHD 
+```{r}
+# Create a stacked bar plot
+barplot(table(fhd.df$TenYearCHD, k_cluster_id_fhd), col = c("lightblue", "lightgreen"), beside = TRUE,
+        main = "Cluster vs. TenYearCHD", xlab = "Cluster ID", ylab = "Count")
+
+# Adding legend with title
+legend("topright", legend = levels(fhd.df$TenYearCHD), fill = c("lightblue", "lightgreen"), title = "TenYearCHD")
+
+```
+
+
+
+Accessing the accuracy of the clusters in predicting the correct level (cluster 1 to target variable level 1 and cluster 2 to target variable level 0). 
+```{r}
+acc_cluster <- 1 - (sum(diag(clus_tar_tab)) / sum(clus_tar_tab))
+acc_cluster
+
+```
+
+
+
+
+*Cluster Analysis (Omitted Dataset)*
+```{r}
+k_fhd_omit = kmeans(pc.fhd.df_omit, 2)
+k_fhd_omit
+
+k_cluster_id_fhd_omit <- k_fhd_omit$cluster
+
+```
+
+
+```{r}
+clus.df_omit <- data.frame(pc.fhd.df_omit, fhd.df_omit$TenYearCHD, k_cluster_id_fhd_omit)
+
+ggplot(clus.df_omit, aes(x = PC1, y = PC4, color = factor(k_cluster_id_fhd_omit))) +
+  geom_point(size = 3) +
+  labs(title = "Scatterplot of PC1 vs. PC4 - Color Coded by K-Means Clustering (Omitted dataset)",
+       x = "Principal Component 1", y = "Principal Component 4") +
+  theme_minimal()
+
+ggplot(clus.df_omit, aes(x = PC1, y = PC4, color = fhd.df_omit.TenYearCHD)) +
+  geom_point(size = 3) +
+  labs(title = "Scatterplot of PC1 vs. PC4 - Color Coded by Target Variable (Omitted dataset)",
+       x = "Principal Component 1", y = "Principal Component 4") +
+  theme_minimal()
+
+```
+
+
+```{r}
+#Inspecting the relationship
+chisq.test(fhd.df_omit$TenYearCHD,k_cluster_id_fhd_omit)
+
+#Contingency table
+clus_tar_tab_omit <- table(fhd.df_omit$TenYearCHD,k_cluster_id_fhd_omit)
+clus_tar_tab_omit
+
+#Proportion by row(Target Variable)
+prop.table(clus_tar_tab_omit, margin = 1)
+
+```
+
+
+
+Similar findings asides the cluster labels being flipped
+```{r}
+# Create a stacked bar plot
+barplot(table(fhd.df_omit$TenYearCHD,k_cluster_id_fhd_omit), col = c("lightblue", "lightgreen"), beside = TRUE,
+        main = "Cluster vs. TenYearCHD (Omitted dataset)", xlab = "Cluster ID", ylab = "Count")
+
+# Adding legend
+legend("topright", legend = levels(fhd.df_omit$TenYearCHD), fill = c("lightblue", "lightgreen", title = "TenYearCHD"))
+
+```
+
+
+
+```{r}
+acc_cluster_omit <- sum(diag(clus_tar_tab_omit)) / sum(clus_tar_tab_omit)
+acc_cluster_omit
+
+acc_cluster
+
+```
+
+
+*Supervised Machine Learning (Decision Trees)*
+For consistency, the upsampling done by Abdul Nawabi for random forests needs to be established
+```{r}
+# set random seed
+set.seed(1999)
+CHD_1 <- which(fhd.df_omit$TenYearCHD == "1")
+CHD_0 <- which(fhd.df_omit$TenYearCHD == "0")
+
+# Let take a sample from our (0) target variable according to number of (1)
+CHD_1_upsample <- sample(CHD_1,length(CHD_0), replace = TRUE)
+fhd.df_omit_upsample <- fhd.df_omit[c(CHD_1_upsample,CHD_0),]
+
+# To check the target variable is balanced:
+print(table(fhd.df_omit_upsample$TenYearCHD))
+
+# create a 70/30 training/test set split
+n_rows <- nrow(fhd.df_omit_upsample)
+# sample 70% (n_rows * 0.7) indices in the ranges 1:nrows
+training_idx_upsample <- sample(n_rows, n_rows * 0.7)
+# filter the data frame with the training indices (and the complement)
+training_fhd.df_upsample <- fhd.df_omit_upsample[training_idx_upsample,]
+test_fhd.df_upsample <- fhd.df_omit_upsample[-training_idx_upsample,]
+```
+
+
+
+Data Preparation
+```{r}
+set.seed(12)
+#Subsetting for both levels
+fhd.df_omit_0 <- subset.data.frame(fhd.df_omit, fhd.df_omit$TenYearCHD == 0)
+fhd.df_omit_1 <- subset.data.frame(fhd.df_omit, fhd.df_omit$TenYearCHD == 1)
+
+# Selecting all rows
+n_rows_fhd_0 <- nrow(fhd.df_omit_0)
+
+# Selecting all rows
+n_rows_fhd_1 <- nrow(fhd.df_omit_1)
+
+set.seed(1001)
+# Sampling 70% for training set
+training_fhd_0 <- sample(n_rows_fhd_0, n_rows_fhd_0 * 0.7)
+training_fhd_1 <- sample(n_rows_fhd_1, n_rows_fhd_1 * 0.7)
+
+# Separating the data
+training_fhd_omit_0 <- fhd.df_omit_0[training_fhd_0,]
+training_fhd_omit_1 <- fhd.df_omit_1[training_fhd_1,]
+
+test_fhd_omit_0 <- fhd.df_omit_0[-training_fhd_0,]
+test_fhd_omit_1 <- fhd.df_omit_1[-training_fhd_1,]
+
+# Rejoining them
+training_fhd_omit <- rbind(training_fhd_omit_0,training_fhd_omit_1)
+test_fhd_omit <- rbind(test_fhd_omit_0,test_fhd_omit_1)
+```
+
+
+Applying and inspecting the Decision tree. 
+```{r}
+# defining the formula predicting likelihood of TenYearCHD
+fhd_omit_formula = TenYearCHD ~ age + sysBP + diaBP + BMI + gender + education + BPMeds + prevalentStroke + prevalentHyp + diabetes
+
+# training the decision tree
+fhd_omit_target <- tree(fhd_omit_formula, data = training_fhd_omit)
+
+# inspect the tree
+summary(fhd_omit_target)
+
+# plot the tree
+plot(fhd_omit_target)
+text(fhd_omit_target, pretty = 0)
+
+#Examining the ratio of levels in the target variable
+prop.table(table(fhd.df_omit$TenYearCHD))
+
+```
+
+
+Data Preparation for PC values and similar subsetting
+```{r}
+fhd_omit_pc_combined <- cbind(fhd.df_omit,pc.fhd.df_omit)
+
+#Subsetting again
+fhd.df_omit_pc_0 <- subset.data.frame(fhd_omit_pc_combined, fhd_omit_pc_combined$TenYearCHD == 0)
+fhd.df_omit_pc_1 <- subset.data.frame(fhd_omit_pc_combined, fhd_omit_pc_combined$TenYearCHD == 1)
+```
+
+
+Separating the subsets similarly for test and training and rejoining them for Machine Learning
+```{r}
+# Separating the data
+training_fhd_omit_pc_0 <- fhd.df_omit_pc_0[training_fhd_0,]
+training_fhd_omit_pc_1 <- fhd.df_omit_pc_1[training_fhd_1,]
+
+test_fhd_omit_pc_0 <- fhd.df_omit_pc_0[-training_fhd_0,]
+test_fhd_omit_pc_1 <- fhd.df_omit_pc_1[-training_fhd_1,]
+
+# Rejoining them
+training_fhd_omit_pc <- rbind(training_fhd_omit_pc_0,training_fhd_omit_pc_1)
+test_fhd_omit_pc <- rbind(test_fhd_omit_pc_0,test_fhd_omit_pc_1)
+
+```
+
+
+
+Applying and inspecting the Decision tree for PC values.
+```{r}
+# defining the formula predicting likelihood of TenYearCHD
+fhd_omit_pc_formula = TenYearCHD ~ PC1 + PC4 + PC5 + gender + education + BPMeds + prevalentStroke + prevalentHyp + diabetes
+
+# training the decision tree
+fhd_omit_pc_target <- tree(fhd_omit_pc_formula, data = training_fhd_omit_pc)
+
+# inspect the tree
+summary(fhd_omit_pc_target)
+
+# plot the tree
+plot(fhd_omit_pc_target)
+text(fhd_omit_pc_target, pretty = 0)
+
+```
+
+
+Decision tree prediction
+```{r}
+# compute the prediction
+#   note: the TenYearCHD attribute (column 16) is excluded from the test data set
+tree_fhd_omit_pred <- predict(fhd_omit_target, test_fhd_omit[,-16], type= "class")
+tree_fhd_omit_pc_pred <- predict(fhd_omit_pc_target, test_fhd_omit_pc[,-16], type= "class")
+
+# create a table with actual values and the two predictions
+fhd_target_results <- data.frame(
+  actual = test_fhd_omit$TenYearCHD,
+  predicted = tree_fhd_omit_pred,
+  PCpredicted = tree_fhd_omit_pc_pred
+)
+
+# create a contingency table for the actual VS predicted for both predictions
+predicted_results_table <- table(fhd_target_results[,c('actual', 'predicted')])
+predicted_results_table
+PCpredicted_results_table <- table(fhd_target_results[,c('actual', 'PCpredicted')])
+PCpredicted_results_table
+
+# calculate accuracy from each contigency table
+#   as sum of diagonal elements over sum of the matrix values
+acc_predicted <- sum(diag(predicted_results_table)) / sum(predicted_results_table)
+acc_predicted
+acc_PCpredicted <- sum(diag(PCpredicted_results_table)) / sum(PCpredicted_results_table)
+acc_PCpredicted
+
+```
+
+I will now attempt to balance the levels of the target variable via down sampling. 
+```{r}
+fhd.df_omit_0_random <- sample(n_rows_fhd_0, n_rows_fhd_0)
+```
+
+
+
+Creating 5 different samples of target variable level "0" to pair with fhd.df_omit_1
+```{r}
+fhd.df_omit_0_a <- fhd.df_omit_0[fhd.df_omit_0_random[1:620],]
+fhd.df_omit_0_b <- fhd.df_omit_0[fhd.df_omit_0_random[621:1240],]
+fhd.df_omit_0_c <- fhd.df_omit_0[fhd.df_omit_0_random[1241:1860],]
+fhd.df_omit_0_d <- fhd.df_omit_0[fhd.df_omit_0_random[1861:2480],]
+fhd.df_omit_0_e <- fhd.df_omit_0[fhd.df_omit_0_random[2481:3099],]
+```
+
+
+Decision tree will be applied to these 5 dataframes
+```{r}
+fhd.df_omit_a <- rbind(fhd.df_omit_0_a,fhd.df_omit_1)
+fhd.df_omit_b <- rbind(fhd.df_omit_0_b,fhd.df_omit_1)
+fhd.df_omit_c <- rbind(fhd.df_omit_0_c,fhd.df_omit_1)
+fhd.df_omit_d <- rbind(fhd.df_omit_0_d,fhd.df_omit_1)
+fhd.df_omit_e <- rbind(fhd.df_omit_0_e,fhd.df_omit_1)
+```
+
+
+Data Preparation for the 5 decision trees
+```{r}
+# Selecting all rows
+n_rows_a_d <- nrow(fhd.df_omit_a)
+n_rows_e <- nrow(fhd.df_omit_e)
+
+# Sampling 70% for training set
+training_fhd_a_d <- sample(n_rows_a_d, n_rows_a_d * 0.7)
+training_fhd_e <- sample(n_rows_e, n_rows_e * 0.7)
+
+# Separating the data
+training_fhd_omit_a <- fhd.df_omit_a[training_fhd_a_d,]
+training_fhd_omit_b <- fhd.df_omit_b[training_fhd_a_d,]
+training_fhd_omit_c <- fhd.df_omit_c[training_fhd_a_d,]
+training_fhd_omit_d <- fhd.df_omit_d[training_fhd_a_d,]
+training_fhd_omit_e <- fhd.df_omit_e[training_fhd_e,]
+
+test_fhd_omit_a <- fhd.df_omit_a[-training_fhd_a_d,]
+test_fhd_omit_b <- fhd.df_omit_b[-training_fhd_a_d,]
+test_fhd_omit_c <- fhd.df_omit_c[-training_fhd_a_d,]
+test_fhd_omit_d <- fhd.df_omit_d[-training_fhd_a_d,]
+test_fhd_omit_e <- fhd.df_omit_e[-training_fhd_e,]
+```
+
+
+Implementing the decision tree
+```{r}
+# Formula predicting likelihood of TenYearCHD "fhd_omit_formula" has been defined 
+
+# training the decision tree
+fhd_omit_target_a <- tree(fhd_omit_formula, data = training_fhd_omit_a)
+fhd_omit_target_b <- tree(fhd_omit_formula, data = training_fhd_omit_b)
+fhd_omit_target_c <- tree(fhd_omit_formula, data = training_fhd_omit_c)
+fhd_omit_target_d <- tree(fhd_omit_formula, data = training_fhd_omit_d)
+fhd_omit_target_e <- tree(fhd_omit_formula, data = training_fhd_omit_e)
+
+# inspect the tree
+summary(fhd_omit_target_a)
+summary(fhd_omit_target_b)
+summary(fhd_omit_target_c)
+summary(fhd_omit_target_d)
+summary(fhd_omit_target_e)
+
+# plot the tree
+plot(fhd_omit_target_a)
+text(fhd_omit_target_a, pretty = 0)
+
+plot(fhd_omit_target_b)
+text(fhd_omit_target_b, pretty = 0)
+
+plot(fhd_omit_target_c)
+text(fhd_omit_target_c, pretty = 0)
+
+plot(fhd_omit_target_d)
+text(fhd_omit_target_d, pretty = 0)
+
+plot(fhd_omit_target_e)
+text(fhd_omit_target_e, pretty = 0)
+
+```
+
+
+
+The PC equivalent for these 5 samples will now be prepared for the decision tree.
+```{r}
+#fhd.df_omit_pc_0 takes fhd,df_omit_0 and includes the PC1 to PC5
+fhd.df_omit_pc_0_a <- fhd.df_omit_pc_0[fhd.df_omit_0_random[1:620],]
+fhd.df_omit_pc_0_b <- fhd.df_omit_pc_0[fhd.df_omit_0_random[621:1240],]
+fhd.df_omit_pc_0_c <- fhd.df_omit_pc_0[fhd.df_omit_0_random[1241:1860],]
+fhd.df_omit_pc_0_d <- fhd.df_omit_pc_0[fhd.df_omit_0_random[1861:2480],]
+fhd.df_omit_pc_0_e <- fhd.df_omit_pc_0[fhd.df_omit_0_random[2481:3099],]
+```
+
+
+They will be bound by row next
+```{r}
+fhd.df_omit_pc_a <- rbind(fhd.df_omit_pc_0_a,fhd.df_omit_pc_1)
+fhd.df_omit_pc_b <- rbind(fhd.df_omit_pc_0_b,fhd.df_omit_pc_1)
+fhd.df_omit_pc_c <- rbind(fhd.df_omit_pc_0_c,fhd.df_omit_pc_1)
+fhd.df_omit_pc_d <- rbind(fhd.df_omit_pc_0_d,fhd.df_omit_pc_1)
+fhd.df_omit_pc_e <- rbind(fhd.df_omit_pc_0_e,fhd.df_omit_pc_1)
+```
+
+
+Separating the data
+```{r}
+# Separating the data
+training_fhd_omit_pc_a <- fhd.df_omit_pc_a[training_fhd_a_d,]
+training_fhd_omit_pc_b <- fhd.df_omit_pc_b[training_fhd_a_d,]
+training_fhd_omit_pc_c <- fhd.df_omit_pc_c[training_fhd_a_d,]
+training_fhd_omit_pc_d <- fhd.df_omit_pc_d[training_fhd_a_d,]
+training_fhd_omit_pc_e <- fhd.df_omit_pc_e[training_fhd_e,]
+
+test_fhd_omit_pc_a <- fhd.df_omit_pc_a[-training_fhd_a_d,]
+test_fhd_omit_pc_b <- fhd.df_omit_pc_b[-training_fhd_a_d,]
+test_fhd_omit_pc_c <- fhd.df_omit_pc_c[-training_fhd_a_d,]
+test_fhd_omit_pc_d <- fhd.df_omit_pc_d[-training_fhd_a_d,]
+test_fhd_omit_pc_e <- fhd.df_omit_pc_e[-training_fhd_e,]
+```
+
+
+
+Implementing the decision tree, we see similar results. The non balanced trees are more accurate despite limited insight. 
+```{r}
+# Formula predicting likelihood of TenYearCHD "fhd_omit_pc_formula" has been defined 
+
+# training the decision tree
+fhd_omit_pc_target_a <- tree(fhd_omit_pc_formula, data = training_fhd_omit_pc_a)
+fhd_omit_pc_target_b <- tree(fhd_omit_pc_formula, data = training_fhd_omit_pc_b)
+fhd_omit_pc_target_c <- tree(fhd_omit_pc_formula, data = training_fhd_omit_pc_c)
+fhd_omit_pc_target_d <- tree(fhd_omit_pc_formula, data = training_fhd_omit_pc_d)
+fhd_omit_pc_target_e <- tree(fhd_omit_pc_formula, data = training_fhd_omit_pc_e)
+
+# inspect the tree
+summary(fhd_omit_pc_target_a)
+summary(fhd_omit_pc_target_b)
+summary(fhd_omit_pc_target_c)
+summary(fhd_omit_pc_target_d)
+summary(fhd_omit_pc_target_e)
+
+# plot the tree
+plot(fhd_omit_pc_target_a)
+text(fhd_omit_pc_target_a, pretty = 0)
+
+plot(fhd_omit_pc_target_b)
+text(fhd_omit_pc_target_b, pretty = 0)
+
+plot(fhd_omit_pc_target_c)
+text(fhd_omit_pc_target_c, pretty = 0)
+
+plot(fhd_omit_pc_target_d)
+text(fhd_omit_pc_target_d, pretty = 0)
+
+plot(fhd_omit_pc_target_e)
+text(fhd_omit_pc_target_e, pretty = 0)
+
+```
+
+
+Results of downsampling
+```{r}
+all_trees_ds <- list(fhd_omit_target_a,fhd_omit_target_b, fhd_omit_target_c, fhd_omit_target_d, fhd_omit_target_e, fhd_omit_pc_target_a, fhd_omit_pc_target_b, fhd_omit_pc_target_c, fhd_omit_pc_target_d, fhd_omit_pc_target_e)
+
+all_test_ds <- list(test_fhd_omit_a, test_fhd_omit_b, test_fhd_omit_c, test_fhd_omit_d, test_fhd_omit_e, test_fhd_omit_pc_a, test_fhd_omit_pc_b, test_fhd_omit_pc_c, test_fhd_omit_pc_d, test_fhd_omit_pc_e)
+
+# Apply predict function to each pair of model and test dataset. Code from here was made with aid of chatgpt for simplificatiion
+ds_predictions <- lapply(1:length(all_trees_ds), function(i) {
+  predict(all_trees_ds[[i]], all_test_ds[[i]][,-16], type = "class")  
+})
+```
+
+Tabulating results
+```{r}
+#Tabulating results for each of the 5 downsamples
+ds_result_df_a <- data.frame(
+  actual = test_fhd_omit_a$TenYearCHD,
+  predicted = ds_predictions[[1]],
+  PCpredicted = ds_predictions[[6]])
+
+ds_result_df_b <- data.frame(
+  actual = test_fhd_omit_b$TenYearCHD,
+  predicted = ds_predictions[[2]],
+  PCpredicted = ds_predictions[[7]])
+
+ds_result_df_c <- data.frame(
+  actual = test_fhd_omit_c$TenYearCHD,
+  predicted = ds_predictions[[3]],
+  PCpredicted = ds_predictions[[8]])
+
+ds_result_df_d <- data.frame(
+  actual = test_fhd_omit_d$TenYearCHD,
+  predicted = ds_predictions[[4]],
+  PCpredicted = ds_predictions[[9]])
+
+ds_result_df_e <- data.frame(
+  actual = test_fhd_omit_e$TenYearCHD,
+  predicted = ds_predictions[[5]],
+  PCpredicted = ds_predictions[[10]])
+```
+
+Creating contingency tables
+```{r}
+# placing all tables in a list
+ds_result_df <- list(ds_result_df_a, ds_result_df_b, ds_result_df_c, ds_result_df_d, ds_result_df_e)
+
+# Apply table function to each dataframe in ds_result_df
+ds_contingency <- lapply(ds_result_df, function(df) {
+  table(df$actual, df$predicted)
+})  
+ds_contingency
+```
+
+Repeat for PC predictions
+```{r}
+# Apply table function to each dataframe in ds_result_df
+ds_contingency_pc <- lapply(ds_result_df, function(df) {
+  table(df$actual, df$PCpredicted)
+})  
+ds_contingency_pc 
+```
+
+Accuracy for all downsamples 
+```{r}
+# Calculate accuracy for each contingency table in ds_contingency
+acc_ds_contingency <- lapply(ds_contingency, function(table) {
+  sum(diag(table)) / sum(table)
+})
+acc_ds_contingency
+# Calculate accuracy for each contingency table in ds_contingency_pc
+acc_ds_contingency_pc <- lapply(ds_contingency_pc, function(table) {
+  sum(diag(table)) / sum(table)
+})
+acc_ds_contingency_pc
+```
+
+Upsampling the dataset 
+```{r}
+fhd_omit_target_up <- tree(fhd_omit_formula, data = training_fhd.df_upsample)
+
+# inspect the tree
+summary(fhd_omit_target_up)
+
+# plot the tree
+plot(fhd_omit_target_up)
+text(fhd_omit_target_up, pretty = 0)
+```
+
+Assessing the accuracy
+```{r}
+# compute the prediction
+#   note: the TenYearCHD attribute (column 16) is excluded from the test data set
+tree_fhd_omit_pred_up <- predict(fhd_omit_target_up, test_fhd.df_upsample[,-16], type= "class")
+
+# create a table with actual values and the two predictions
+fhd_target_results_up <- data.frame(
+  actual = test_fhd.df_upsample$TenYearCHD,
+  predicted = tree_fhd_omit_pred_up
+)
+
+# create a contingency table for the actual VS predicted for both predictions
+predicted_results_table_up <- table(fhd_target_results_up[,c('actual', 'predicted')])
+predicted_results_table_up
+
+# calculate accuracy from each contigency table
+acc_predicted_up <- sum(diag(predicted_results_table_up)) / sum(predicted_results_table_up)
+acc_predicted_up
+
+```
+
+
+
+```{r}
+ggplot(fhd.df_omit, aes(x = age, y = sysBP, color = fhd.df_omit$TenYearCHD)) +
+  geom_point(size = 3) +
+  labs(title = "Scatterplot of age vs. sysBP - Color Coded by Target Variable (Omitted dataset)",
+       x = "age", y = "systolic blood pressure") +
+  theme_minimal()
+```
+
+
+###Apply Prediction method Random Forest on cleaned data set:
+
+### 1. Installing the random forest package:
+```{r}
+if(require(randomForest) == FALSE){
+  install.packages('randomForest')
+  library(randomForest)
+}
+```
+
+
+
+```{r}
+# Lets find the number of observations for each target variable:
+print(table(fhd.df_omit$TenYearCHD))
+
+# Lets chec these numbers in other way
+
+CHD_1 <- which(fhd.df_omit$TenYearCHD == "1")
+CHD_0 <- which(fhd.df_omit$TenYearCHD == "0")
+length(CHD_1)
+length(CHD_0)
+
+# Let take a sample from our (0) target variable according to number of (1)
+CHD_0_downsample <- sample(CHD_0,length(CHD_1))
+fhd.df_omit_downsample <- fhd.df_omit[c(CHD_0_downsample,CHD_1),]
+
+# To check the target variable is balanced:
+print(table(fhd.df_omit_downsample$TenYearCHD))
+```
+
+
+
+```{r}
+# start with cleaned dataset (fhd.df)
+# inspect the data
+str(fhd.df_omit_downsample)
+
+# set random seed
+set.seed(1999)
+# create a 70/30 training/test set split
+n_rows <- nrow(fhd.df_omit_downsample)
+# sample 70% (n_rows * 0.7) indices in the ranges 1:nrows
+training_idx_downsample <- sample(n_rows, n_rows * 0.7)
+# filter the data frame with the training indices (and the complement)
+training_fhd.df_downsample <- fhd.df_omit_downsample[training_idx_downsample,]
+test_fhd.df_downsample <- fhd.df_omit_downsample[-training_idx_downsample,]
+```
+#### 3. Random forest training with down sampling technique 
+```{r}
+# define a formula for predicting Sales
+fhd.df_omit_formula = TenYearCHD ~ glucose + heartRate + BMI + diaBP + sysBP + totChol +  diabetes + prevalentHyp + prevalentStroke + BPMeds + cigsPerDay + currentSmoker + education + age + gender
+
+# train a model with random forest
+#   note: number of trees is set to 500
+#     and calculation of attributes importance is requested
+rf_fhd.df_downsample <- randomForest(fhd.df_omit_formula, ntree = 500, importance = T, data = training_fhd.df_downsample)
+
+# plot the error rates
+#   note: the labels for the legend are extracted from the rf object
+#     and they include Out-of-bag (OOB) error. OOB is the average error
+#     calculated for each point using only trees that were not trained
+#     using that point
+plot(rf_fhd.df_downsample)
+legend('topright', colnames(rf_fhd.df_downsample$err.rate), bty = 'n', lty = c(1,2,3), col = c(1:3))
+
+# plot the variable importancea according to the
+varImpPlot(rf_fhd.df_downsample, type = 1)
+```
+#### 6. Random forest prediction with down sampling technique {#Random_forest_prediction}
+```{r}
+# compute the prediction for the random forest model
+#   note: the TenYearCHD attribute (column 16) is excluded from the test data set
+rf_fhd.df_pred_downsample <- predict(rf_fhd.df_downsample, test_fhd.df_downsample[,-16], type= "class")
+
+# create a contingency table for the actual VS predicted for the random forest model
+rf_results_table_downsample <- table(rf = rf_fhd.df_pred_downsample,  actual = test_fhd.df_downsample$TenYearCHD)
+rf_results_table_downsample
+
+# calculate accuracy from each contigency table
+#   as sum of diagonal elements over sum of the matrix values
+acc_rf_downsample <- sum(diag(rf_results_table_downsample)) / sum(rf_results_table_downsample)
+acc_rf_downsample
+```
+
+###Up sampling:
+```{r}
+# Lets find the number of observations for each target variable:
+print(table(fhd.df_omit$TenYearCHD))
+
+# We already have CHD_1 and CHD_0
+
+length(CHD_1)
+length(CHD_0)
+
+# Let take a sample from our (0) target variable according to number of (1)
+CHD_1_upsample <- sample(CHD_1,length(CHD_0), replace = TRUE)
+fhd.df_omit_upsample <- fhd.df_omit[c(CHD_1_upsample,CHD_0),]
+
+# To check the target variable is balanced:
+print(table(fhd.df_omit_upsample$TenYearCHD))
+```
+
+#### 3. Random forest training with up sampling technique 
+```{r}
+# define a formula for predicting Sales
+fhd.df_omit_formula = TenYearCHD ~ glucose + heartRate + BMI + diaBP + sysBP + totChol +  diabetes + prevalentHyp + prevalentStroke + BPMeds + cigsPerDay + currentSmoker + education + age + gender
+
+# train a model with random forest
+#   note: number of trees is set to 500
+#     and calculation of attributes importance is requested
+rf_fhd.df_upsample <- randomForest(fhd.df_omit_formula, ntree = 500, importance = T, data = training_fhd.df_upsample)
+
+# plot the error rates
+#   note: the labels for the legend are extracted from the rf object
+#     and they include Out-of-bag (OOB) error. OOB is the average error
+#     calculated for each point using only trees that were not trained
+#     using that point
+plot(rf_fhd.df_upsample)
+legend('topright', colnames(rf_fhd.df_upsample$err.rate), bty = 'n', lty = c(1,2,3), col = c(1:3))
+
+# plot the variable importancea according to the
+varImpPlot(rf_fhd.df_upsample, type = 1)
+```
+***
+
+#### 6. Random forest prediction with upsample technique{#Random_forest_prediction}
+```{r}
+# compute the prediction for the random forest model
+#   note: the TenYearCHD attribute (column 16) is excluded from the test data set
+rf_fhd.df_pred_upsample <- predict(rf_fhd.df_upsample, test_fhd.df_upsample[,-16], type= "class")
+
+# create a contingency table for the actual VS predicted for the random forest model
+rf_results_table_upsample <- table(rf = rf_fhd.df_pred_upsample,  actual = test_fhd.df_upsample$TenYearCHD)
+rf_results_table_upsample
+
+# calculate accuracy from each contigency table
+#   as sum of diagonal elements over sum of the matrix values
+acc_rf_upsample <- sum(diag(rf_results_table_upsample)) / sum(rf_results_table_upsample)
+acc_rf_upsample
+```
+
+
+###  SUPPORT VECTOR MACHINE
+
+```{r}
+if(require(kernlab) == FALSE){
+  install.packages('kernlab')
+  library(kernlab)
+  library(caret)
+}
+```
+```{r}
+if(!require(caret)){
+  install.packages("caret")
+  library(caret)
+}
+library(ggplot2)
+```
+
+
+#### SUPPORT VECTOR MACHINE(SVM)
+#Defining the formula for predicting likelihood of TenyearCHD.
+```{r}
+# defining the formula predicting likelihood of TenYearCHD
+fhd_omit_formula = TenYearCHD ~ age + sysBP + diaBP + BMI + gender + education + BPMeds + prevalentStroke + prevalentHyp + diabetes
+
+#   note: ksvm automatically scales the attribute values
+#     there is no need to perform a preliminary data transformation
+# train an SVM model with a linear kernel (vanilladot) and cost set to 1
+# also train svm model with 'rbfdot' and cost set to 1
+Svm_fhd_omit <- ksvm(fhd_omit_formula, data = training_fhd.df_upsample, kernel = 'vanilladot', C = 1, type = "C-svc")
+# train an SVM model with a radial basis kernel (rfbdot) and cost set to 1
+Svm_fhd_omit_rbf <- ksvm(fhd_omit_formula, data = training_fhd.df_upsample, kernel = 'rbfdot', C = 1, type = "C-svc")
+
+#plot he graph
+summary(Svm_fhd_omit)
+summary(Svm_fhd_omit_rbf)
+```
+
+#### SVM prediction (binary classifier){#SVM_prediction_binary_classifier}
+```{r}
+#svm prediction for linear Kernel
+Svm_fhd_omit_pred <- predict(Svm_fhd_omit, test_fhd.df_upsample[, -16])
+print(Svm_fhd_omit_pred)
+#svm prediction for rfbdot
+Svm_fhd_omit_rbf_pred <- predict(Svm_fhd_omit_rbf, test_fhd.df_upsample[, -16])
+print(Svm_fhd_omit_rbf_pred)
+```
+
+### Create Contigency table for actual versus Prediction for Svm
+```{r}
+
+actual_values <- test_fhd.df_upsample$TenYearCHD
+Svm_fhd_omit_table <- table(Predicted=Svm_fhd_omit_pred, Actual=actual_values )
+Svm_fhd_omit_rbf_table <- table(predicted = Svm_fhd_omit_rbf_pred, actual = actual_values)
+
+print(Svm_fhd_omit_table)
+print(Svm_fhd_omit_rbf_table)
+# Assuming you're working with Svm_fhd_omit_table for this example
+df_Svm_Omit <- as.data.frame(as.table(Svm_fhd_omit_table))
+df_Svm_rbf <- as.data.frame(as.table(Svm_fhd_omit_rbf_table))
+#For frequency in rbf
+df_Svm_rbf$Freq <- as.numeric(as.character(df_Svm_rbf$Freq))
+str(df_Svm_rbf)
+head(df_Svm_rbf)
+str(df_Svm_Omit)
+head(df_Svm_Omit)
+```
+
+```{r}
+ggplot(df_Svm_Omit, aes(x=Predicted, y=Actual, fill=Freq)) +
+  geom_tile() +
+  geom_text(aes(label=Freq), vjust=1.5) +
+  scale_fill_gradient(low="white", high="blue") +
+  labs(y="Predicted", x="Actual", fill="Frequency")
+
+ #Renaming columns to match your ggplot aes mappings
+names(df_Svm_rbf) <- c("Predicted", "Actual", "Freq")
+
+ggplot(df_Svm_rbf, aes(x=Predicted, y=Actual, fill=Freq)) +
+  geom_tile() +
+  geom_text(aes(label=Freq), vjust=1.5) +
+  scale_fill_gradient(low="white", high="blue") +
+  labs(y="Predicted", x="Actual", fill="Frequency")
+```
+
+#### Calculating accuracy from the contigency table
+```{r}
+#sum diagonal elements over sum of the matrix values
+acc_svm_fhd <- sum(diag(Svm_fhd_omit_table))/sum(Svm_fhd_omit_table)
+print(acc_svm_fhd)
+acc_svm_fhd_rf <- sum(diag(Svm_fhd_omit_rbf_table))/sum(Svm_fhd_omit_rbf_table)
+print(acc_svm_fhd_rf)
+#show accuracy using a confusionmatrix
+confusionMatrix(Svm_fhd_omit_table)
+confusionMatrix(Svm_fhd_omit_rbf_table)
+
+```
+
+
+###  K-NEAREST NEIGHBOUR
+
+```{r}
+if(require(class) == FALSE){
+  install.packages('class')
+  library(class)
+}
+```
+```{r}
+if(!require(caret)){
+  install.packages("caret")
+  library(caret)
+}
+library(ggplot2)
+```
+
+
+
+#### K-Nearest Neighbour (KNN), Data Preparation
+```{r}
+# using the upsampled dataset created earlier
+fhd.df_omit_transformed <- fhd.df_omit
+
+# transforming categorical variables into numeric
+levels(fhd.df_omit_transformed$gender)[levels(fhd.df_omit_transformed$gender)=='male'] = "1"
+levels(fhd.df_omit_transformed$gender)[levels(fhd.df_omit_transformed$gender)=='female'] = "0"
+
+levels(fhd.df_omit_transformed$education)[levels(fhd.df_omit_transformed$education)=='Secondary School'] = "1"
+levels(fhd.df_omit_transformed$education)[levels(fhd.df_omit_transformed$education)=='Graduation'] = "2"
+levels(fhd.df_omit_transformed$education)[levels(fhd.df_omit_transformed$education)=='Post Graduation'] = "3"
+levels(fhd.df_omit_transformed$education)[levels(fhd.df_omit_transformed$education)=='PHD'] = "4"
+
+fhd.df_omit_transformed$gender <- as.numeric(fhd.df_omit_transformed$gender) - 1
+fhd.df_omit_transformed$education <- as.numeric(fhd.df_omit_transformed$education)
+fhd.df_omit_transformed$currentSmoker <- as.numeric(fhd.df_omit_transformed$currentSmoker) - 1
+fhd.df_omit_transformed$BPMeds <- as.numeric(fhd.df_omit_transformed$BPMeds) - 1
+fhd.df_omit_transformed$prevalentStroke <- as.numeric(fhd.df_omit_transformed$prevalentStroke) - 1
+fhd.df_omit_transformed$prevalentHyp <- as.numeric(fhd.df_omit_transformed$prevalentHyp) - 1
+fhd.df_omit_transformed$diabetes <- as.numeric(fhd.df_omit_transformed$diabetes) - 1
+fhd.df_omit_transformed$TenYearCHD <- as.numeric(fhd.df_omit_transformed$TenYearCHD) - 1
+
+### transforming the dataset for kNN with a min-max function
+MinMax <- function(x){
+  tx <- (x - min(x)) / (max(x) - min(x))
+  return(tx)
+}
+# Applying minmax function to all columns
+fhd.df_omit_transformed_minmax <- lapply(fhd.df_omit_transformed, MinMax)
+fhd.df_omit_transformed_minmax <- as.data.frame(fhd.df_omit_transformed_minmax)
+colnames(fhd.df_omit_transformed_minmax) <- colnames(fhd.df_omit_transformed)
+
+fhd.df_omit_transformed_minmax_upsample <- fhd.df_omit_transformed_minmax[c(CHD_1_upsample,CHD_0),]
+
+
+training_fhd.df_omit_transformed_minmax_upsample <- fhd.df_omit_transformed_minmax_upsample[training_idx_upsample,]
+test_fhd.df_omit_transformed_minmax_upsample <- fhd.df_omit_transformed_minmax_upsample[-training_idx_upsample,]
+```
+
+#Defining the formula for predicting likelihood of TenyearCHD.
+```{r}
+# defining the k-value for kNN
+k_value = sqrt(length(training_fhd.df_omit_transformed_minmax_upsample))
+
+# train a kNN model and predict on the test data
+knn_fhd_omit_pred <- knn(train = training_fhd.df_omit_transformed_minmax_upsample[,-16], test = test_fhd.df_omit_transformed_minmax_upsample[,-16], cl = training_fhd.df_omit_transformed_minmax_upsample[,16], k_value)
+```
+
+### Create Contigency table for actual versus Prediction for kNN
+```{r}
+
+knn_fhd_omit_table <- table(Predicted=knn_fhd_omit_pred, Actual=actual_values )
+
+print(knn_fhd_omit_table)
+# Assuming you're working with Svm_fhd_omit_table for this example
+df_knn_omit <- as.data.frame(as.table(knn_fhd_omit_table))
+
+```
+
+```{r}
+ggplot(df_knn_omit, aes(x=Predicted, y=Actual, fill=Freq)) +
+  geom_tile() +
+  geom_text(aes(label=Freq), vjust=1.5) +
+  scale_fill_gradient(low="white", high="blue") +
+  labs(y="Predicted", x="Actual", fill="Frequency")
+```
+
+#### Calculating accuracy from the contigency table
+```{r}
+#sum diagonal elements over sum of the matrix values
+acc_knn_fhd <- sum(diag(knn_fhd_omit_table))/sum(knn_fhd_omit_table)
+print(acc_knn_fhd)
+
+#show accuracy using a confusionmatrix
+confusionMatrix(knn_fhd_omit_table)
+
+```
+
+
+###  LOGISTIC REGRESSION
+
+```{r}
+if(require(pROC) == FALSE){
+  install.packages('pROC')
+  library(pROC)
+}
+```
+```{r}
+if(!require(caret)){
+  install.packages("caret")
+  library(caret)
+}
+library(ggplot2)
+```
+
+
+#Defining the formula for predicting likelihood of TenyearCHD.
+```{r}
+# define a formula for predicting Sales
+fhd.df_omit_formula = TenYearCHD ~ glucose + heartRate + BMI + diaBP + sysBP + totChol +  diabetes + prevalentHyp + prevalentStroke + BPMeds + cigsPerDay + currentSmoker + education + age + gender
+
+# train a model with glm
+#   note: set family=binomial for logistic regression
+log_fhd <- glm(fhd.df_omit_formula, data = training_fhd.df_omit_transformed_minmax_upsample, family=binomial)
+
+# model summary
+summary(log_fhd)
+
+```
+***
+
+```{r}
+# dropping predictors with high p-value (> 0.1)
+fhd.df_omit_formula_revised = TenYearCHD ~ glucose + sysBP + prevalentStroke + cigsPerDay + age + gender + BMI + diaBP + prevalentHyp + totChol + currentSmoker + education
+
+# Revised logistic model
+log_fhd_revised <- glm(fhd.df_omit_formula_revised, data = training_fhd.df_omit_transformed_minmax_upsample, family=binomial)
+
+summary(log_fhd_revised)
+
+```
+
+
+#### 6. Logistic regression prediction
+```{r}
+# compute the prediction for the logistic regression model
+#   note: the TenYearCHD attribute (column 16) is excluded from the test data set
+log_fhd.df_pred_prob <- predict(log_fhd_revised, newdata=test_fhd.df_omit_transformed_minmax_upsample[,-16], type= "response")
+log_fhd.df_pred <- ifelse(log_fhd.df_pred_prob > 0.5, 1, 0)
+
+# Evaluate model performance
+roc_obj <- roc(test_fhd.df_omit_transformed_minmax_upsample$TenYearCHD, log_fhd.df_pred_prob)
+auc_score <- auc(roc_obj)
+print(auc_score)
+
+# create a contingency table for the actual VS predicted
+log_results_table <- table(log = log_fhd.df_pred,  actual = test_fhd.df_omit_transformed_minmax_upsample$TenYearCHD)
+log_results_table
+
+# calculate accuracy from each contigency table
+#   as sum of diagonal elements over sum of the matrix values
+acc_log <- sum(diag(log_results_table)) / sum(log_results_table)
+acc_log
+```
+```{r}
+#show accuracy using a confusionmatrix
+confusionMatrix(log_results_table)
+```
+
